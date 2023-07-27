@@ -1,0 +1,6 @@
+[submodule "odin-build"]
+	path = odin-build
+	url = https://github.com/dragospopse/odin-build
+[submodule "OpenGL-Registry"]
+	path = OpenGL-Registry
+	url = https://github.com/KhronosGroup/OpenGL-Registry.git

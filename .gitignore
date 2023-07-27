@@ -3,11 +3,15 @@
 # But descend into directories
 !*/
 
+# Submodules
+!.gitsubmodules
+!odin-build
+!OpenGL-Registry
+
+# Root things
+!README.md
 !.gitignore
 
+# Subfolders
 !build/**
 !glgen/**
-
-!odin-build
-
-!README.md
