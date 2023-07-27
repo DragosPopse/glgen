@@ -62,6 +62,10 @@ configure_target :: proc(project: Project, target: Target) -> (config: build.Con
     config.collections["shared"] = strings.concatenate({ODIN_ROOT, "shared"})
     exe_ext := "out"
 
+    if target.platform.os == .Windows {
+        exe_ext = "exe"
+    }
+
     switch target.conf {
         case .Debug: {
             config.flags += {.Debug}
@@ -76,8 +80,8 @@ configure_target :: proc(project: Project, target: Target) -> (config: build.Con
         
 
    
-    config.out = fmt.aprintf("out/%s/RevolverFox.%s", target.name, exe_ext)
-    config.src = "./fox"
+    config.out = fmt.aprintf("glgen.%s", exe_ext)
+    config.src = "./glgen"
     config.name = target.name
     config.defines["GL_DEBUG"] = true
 
