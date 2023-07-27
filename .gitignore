@@ -1,0 +1,13 @@
+# Ignore everything
+*
+# But descend into directories
+!*/
+
+!.gitignore
+
+!build/**
+!glgen/**
+
+!odin-build
+
+!README.md
