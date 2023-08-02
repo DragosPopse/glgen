@@ -6,58 +6,12 @@ import "core:os"
 import "core:io"
 import "core:c"
 import "core:strings"
+import cfront "core:c/frontend"
 
-GL_Type :: enum {
-    GLEnum,
-    GLboolean,
-    GLbitfield,
-    GLbyte,
-    GLubyte,
-    GLshort,
-    GLushort,
-    GLint,
-    GLuint,
-    GLclampx,
-    GLsizei,
-    GLfloat,
-    GLclampf,
-    GLdouble,
-    GLclampd,
-    GLchar,
-    GLcharARB,
-    GLhalf,
-    GLhalfARB,
-    GLfixed,
-    GLintptr,
-    GLintptrARB,
-    GLsizeiptr,
-    GLsizeiptrARB,
-    GLint64,
-    GLint64EXT,
-    GLuint64,
-    GLuint64EXT,
-    GLHalfNV,
-
-
-    GLvdpauSurfaceNV, // = GLintptr
-}
-
-Odin_Type :: enum {
-    cint,
-    cuint,
-    i8,
-    u8,
-    bool,
-    i16,
-    u16,
-    i32,
-    u32,
-    i64,
-    u64,
-    f32,
-    f64,
-    intptr,
-    uintptr,
+GL_Type :: struct {
+    name: string,
+    c_type: string,
+    odin_type: string, // to be determined from c_type
 }
 
 GL_Enum_Type :: enum {
@@ -78,76 +32,20 @@ GL_Enum_Value :: struct {
     groups: []string, // OpenGL has enums that apply to multiple groups. We might want to handle that eventually
 }
 
-string_to_gl_type :: proc(str: string) -> GL_Type {
-    switch str {
-    case "GLEnum": return .GLEnum
-    case "GLboolean": return .GLboolean
-    case "GLbitfield": return .GLbitfield
-    case "GLbyte": return .GLbyte
-    case "GLubyte": return .GLubyte
-    case "GLshort": return .GLshort
-    case "GLushort": return .GLushort
-    case "GLint": return .GLint
-    case "GLuint": return .GLuint
-    case "GLclampx": return .GLclampx
-    case "GLsizei": return .GLsizei
-    case "GLfloat": return .GLfloat
-    case "GLclampf": return .GLclampf
-    case "GLdouble": return .GLdouble
-    case "GLclampd": return .GLclampd
-    case "GLchar": return .GLchar
-    case "GLcharARB": return .GLcharARB
-    case "GLhalf": return .GLhalf
-    case "GLhalfARB": return .GLhalfARB
-    case "GLfixed": return .GLfixed
-    case "GLintptr": return .GLintptr
-    case "GLintptrARB": return .GLintptrARB
-    case "GLsizeiptr": return .GLsizeiptr
-    case "GLsizeiptrARB": return .GLsizeiptrARB
-    case "GLint64": return .GLint64
-    case "GLint64EXT": return .GLint64EXT
-    case "GLuint64": return .GLuint64
-    case "GLuint64EXT": return .GLuint64EXT
-    case "GLHalfNV": return .GLHalfNV
-    case "GLvdpauSurfaceNV": return .GLvdpauSurfaceNV
-    }
-    return nil
+GL_Command :: struct {
+    
 }
 
-gl_type_to_odin_type :: proc(gl_type: GL_Type) -> Odin_Type {
-    switch gl_type {
-    case .GLEnum:           return .cuint
-    case .GLboolean:        return .u8
-    case .GLbitfield:       return .cuint
-    case .GLbyte:           return .i8
-    case .GLubyte:          return .u8
-    case .GLshort:          return .i16
-    case .GLushort:         return .u16
-    case .GLint:            return .cint
-    case .GLuint:           return .cuint
-    case .GLclampx:         return .i32
-    case .GLsizei:          return .cint
-    case .GLfloat:          return .f32
-    case .GLclampf:         return .f32
-    case .GLdouble:         return .f64
-    case .GLclampd:         return .f64
-    case .GLchar:           return .i8
-    case .GLcharARB:        return .i8
-    case .GLhalf:           return .u16
-    case .GLhalfARB:        return .u16
-    case .GLfixed:          return .i32
-    case .GLintptr, .GLvdpauSurfaceNV: return .intptr
-    case .GLintptrARB:      return .intptr
-    case .GLsizeiptr:       return .uintptr
-    case .GLsizeiptrARB:    return .uintptr
-    case .GLint64:          return .i64
-    case .GLint64EXT:       return .i64
-    case .GLuint64:         return .u64
-    case .GLuint64EXT:      return .u64
-    case .GLHalfNV:         return .u16
-    }
-    return nil
+GL_Def :: union {
+    GL_Type,
+    GL_Command,
 }
+
+State :: struct {
+    gl_defs: map[string]GL_Def,
+}
+
+
 
 parse_enums_elem :: proc(doc: ^xml.Document, enums_elem: ^xml.Element) -> (group: GL_Enum_Group) {
     group.type = .Normal
@@ -161,7 +59,8 @@ parse_enums_elem :: proc(doc: ^xml.Document, enums_elem: ^xml.Element) -> (group
         }
     }
     // get all <enum> in <enums>
-    for id in enums_elem.children {
+    for value in enums_elem.value {
+        id := value.(xml.Element_ID)
         enum_elem := &doc.elements[id]
         enum_val: GL_Enum_Value
         if enum_elem.ident == "enum" {
@@ -180,30 +79,119 @@ parse_enums_elem :: proc(doc: ^xml.Document, enums_elem: ^xml.Element) -> (group
     return group
 }
 
-gl_enums: [dynamic]GL_Enum_Group
-
-main :: proc() {
-    gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
-    doc, err := xml.load_from_file(gl_xml_file)    
-    /*
-    types := &doc.elements[typelist]
-    for t, i in types.children {
-        child := doc.elements[t]
-        if child.ident == "type" && i == 1 {
-            fmt.printf("Type: %#v\n", child)
-            name := doc.elements[child.children[0]]
-            fmt.printf("Name: %#v\n", name)
-        } 
-    }
-    */
-
-    { // Get enums
-        for &node in doc.elements {
-            if node.ident == "enums" {
-                result := parse_enums_elem(doc, &node)
-                append(&gl_enums, result)
+parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Element) {
+    using state
+    for value in types_elem.value {
+        type_elem_id := value.(xml.Element_ID)
+        type_elem := doc.elements[type_elem_id]
+        type: GL_Type
+        found_name_attrib := false
+        for attrib in type_elem.attribs {
+            if attrib.key == "name" {
+                found_name_attrib = true
+                type.name = attrib.val
             }
         }
+
+        concatenated_c_type: string
+        for value, i in type_elem.value {
+            switch val in value {
+            case string:
+                concatenated_c_type = strings.concatenate({concatenated_c_type, val})
+                
+            case xml.Element_ID:
+                e := doc.elements[val]
+                if e.ident == "name" {
+                    type.name = e.value[0].(string)
+                }
+            }
+        }
+
+        type.c_type = concatenated_c_type
+        // make sense of the c_type
+        c_type, _ := strings.remove(type.c_type, "typedef", 1)
+        c_type, _ = strings.remove(c_type, ";", 1) 
+        c_type = strings.trim_space(c_type)
+        is_simple_type := true
+        is_nonsense_type := false
+        is_function_type := false
+        for char in c_type {
+            if char == '#' {
+                is_nonsense_type = true
+                is_simple_type = false
+                break
+            }
+            if char == '(' || char == ')' {
+                is_simple_type = false
+                is_function_type = true
+                break
+            }
+        }
+
+        if is_simple_type {
+            c_type = strings.trim_prefix(c_type, "khronos_")
+            c_type = strings.trim_suffix(c_type, "_t")
+            switch c_type {
+            case "unsigned int": type.odin_type = "u32"
+            case "int": type.odin_type = "i32"
+            case "short": type.odin_type = "i16"
+            case "unsigned short": type.odin_type = "u16"
+            case "unsigned char": type.odin_type = "u8"
+            case "char": type.odin_type = "i8"
+            case "void": type.odin_type = "void" // this should be invalid
+            case "void*", "void *": type.odin_type = "rawptr"
+            case "float": type.odin_type = "f32"
+            case "double": type.odin_type = "f64"
+            case "int8": type.odin_type = "i8"
+            case "uint8": type.odin_type = "u8"
+            case "int16": type.odin_type = "i16"
+            case "uint16": type.odin_type = "u16"
+            case "int32": type.odin_type = "i32"
+            case "uint32": type.odin_type = "u32"
+            case "int64": type.odin_type = "i64"
+            case "uint64": type.odin_type = "u64"
+            case "intptr": type.odin_type = "intptr"
+            case "uintptr": type.odin_type = "uintptr"
+            case "ssize": type.odin_type = "uint" // is this correct?
+            case:
+                if strings.contains(c_type, "struct") {
+                    type.odin_type = "rawptr"
+                } else {
+                    type.odin_type = c_type
+                }
+            }
+        } else {
+            // handle special cases to save sanity
+            switch type.name {
+            case "GLDEBUGPROC": type.odin_type = `#type proc "c" (source, type: GLEnum, id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCARB": type.odin_type = `#type proc "c" (source, type: GLEnum, id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCKHR": type.odin_type = `#type proc "c" (source, type: GLEnum, id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLhandleARB": type.odin_type = `u32 when ODIN_OS != .darwin else rawptr`
+            case "khrplatform": // this is nonsense
+            case "GLVULKANPROCNV":
+            case: fmt.panicf("Unhandled special case %v\n", type.name)
+            }
+        }
+        
+        if type.name != "khrplatform" {
+            gl_defs[type.name] = type
+        }
+        
+        // note(dragos): we should assert that the type.name not_in gl_defs
     }
-    fmt.printf("%#v\n\n", len(gl_enums))
+}
+
+main :: proc() {
+    state: State
+    gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
+    doc, err := xml.load_from_file(gl_xml_file, {flags =
+		{.Ignore_Unsupported, .Decode_SGML_Entities}})
+    for &element in doc.elements {
+        if element.ident == "types" {
+            parse_gl_types(&state, doc, &element)
+        }
+    }
+
+    fmt.printf("%#v\n", state.gl_defs)
 }
