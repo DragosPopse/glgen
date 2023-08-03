@@ -49,7 +49,7 @@ State :: struct {
 
 
 
-parse_enums_elem :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Element) {
+parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Element) {
     enum_type: GL_Enum_Type = .Normal
     for attrib in enums_elem.attribs {
         if attrib.key == "type" {
@@ -182,6 +182,88 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
     }
 }
 
+parse_gl_commands :: proc(state: ^State, doc: ^xml.Document, element: ^xml.Element) {
+    for value in element.value {
+        command_elem_id := value.(xml.Element_ID)
+        command_elem := &doc.elements[command_elem_id]
+        if command_elem.ident == "command" {
+            command := parse_gl_command(state, doc, command_elem)
+            state.gl_defs[command.name] = command
+        }
+    }
+}
+
+parse_gl_command :: proc(state: ^State, doc: ^xml.Document, element: ^xml.Element) -> (command: GL_Command) {
+    for value in element.value {
+        tag_id := value.(xml.Element_ID)
+        tag := &doc.elements[tag_id]
+        switch tag.ident {
+        case "proto": 
+            command.name, command.return_type = parse_gl_command_proto(state, doc, tag)        
+        case "param":
+            append(&command.params, parse_gl_command_param(state, doc, tag))
+        }
+    }
+    return command
+}
+
+parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.Element) -> (name, return_type: string) {
+    concat_type: string
+    for value, i in proto.value {
+        switch v in value {
+        case string:
+            concat_type = strings.concatenate({concat_type, v, " "})
+        case xml.Element_ID:
+            elem := doc.elements[v]
+            if elem.ident == "name" {
+                name = elem.value[0].(string)
+            } else if elem.ident == "ptype" {
+                concat_type = strings.concatenate({concat_type, elem.value[0].(string)})
+            }
+        }
+    }
+    concat_type = strings.trim_space(concat_type)
+    if concat_type != "void" {
+        return_type = concat_type
+        switch return_type {
+        case "void*", "void *":
+            return_type = "rawptr"
+        case:
+            is_const := false
+            is_ptr := false
+            is_string := false
+            if strings.contains(concat_type, "*") {
+                is_ptr = true
+                concat_type = strings.trim_right(concat_type, "*")
+            }
+            if strings.contains(concat_type, "const") {
+                is_const = true
+                concat_type = strings.trim_left(concat_type, "const")
+            }
+            if is_ptr && is_const && concat_type == "GLubyte" {
+                is_string = true
+            }
+            for attrib in proto.attribs {
+                if attrib.key == "kind" && attrib.val == "String" {
+                    is_string = true
+                }
+            }
+            concat_type = strings.trim_space(concat_type)
+            if is_string {
+                return_type = "cstring"
+            } else if is_ptr {
+                return_type = strings.concatenate({"^", concat_type}) 
+            }
+        }
+    }
+    return name, return_type
+}
+
+parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^xml.Element) -> (param: GL_Command_Param) {
+    return param
+}
+
+
 main :: proc() {
     state: State
     gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
@@ -190,9 +272,15 @@ main :: proc() {
     for &element in doc.elements {
         switch element.ident {
         case "types": parse_gl_types(&state, doc, &element)
-        case "enums": parse_enums_elem(&state, doc, &element)\
+        case "enums": parse_gl_enums(&state, doc, &element)
+        case "commands": parse_gl_commands(&state, doc, &element)
         }
     }
 
-    fmt.printf("%#v\n", state.gl_defs)
+    for _, def in state.gl_defs {
+        if cmd, is_cmd := def.(GL_Command); is_cmd {
+            if cmd.return_type != "" do fmt.printf("%v %v\n", cmd.return_type, cmd.name)
+        }
+        
+    }
 }
