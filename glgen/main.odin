@@ -7,6 +7,7 @@ import "core:io"
 import "core:c"
 import "core:strings"
 import cfront "core:c/frontend"
+import "core:time"
 
 GL_Type :: struct {
     name: string,
@@ -120,8 +121,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
                 is_nonsense_type = true
                 is_simple_type = false
                 break
-            }
-            if char == '(' || char == ')' {
+            } else if char == '(' || char == ')' {
                 is_simple_type = false
                 is_function_type = true
                 break
@@ -129,6 +129,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
         }
 
         if is_simple_type {
+            c_type, _ = strings.remove(c_type, "typedef", 1)
             c_type = strings.trim_prefix(c_type, "khronos_")
             c_type = strings.trim_suffix(c_type, "_t")
             switch c_type {
@@ -150,7 +151,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
             case "uint32": type.odin_type = "u32"
             case "int64": type.odin_type = "i64"
             case "uint64": type.odin_type = "u64"
-            case "intptr": type.odin_type = "intptr"
+            case "intptr": type.odin_type = "int"
             case "uintptr": type.odin_type = "uintptr"
             case "ssize": type.odin_type = "int" // is this correct?
             case:
@@ -169,7 +170,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
             case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
             case "GLhandleARB": type.odin_type = `u32 when ODIN_OS != .darwin else rawptr`
             case "khrplatform": // this is nonsense
-            case "GLVULKANPROCNV":
+            case "GLVULKANPROCNV": type.odin_type = `nil`
             case: fmt.panicf("Unhandled special case %v\n", type.name)
             }
         }
@@ -235,11 +236,11 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
             is_string := false
             if strings.contains(concat_type, "*") {
                 is_ptr = true
-                concat_type = strings.trim_right(concat_type, "*")
+                concat_type, _ = strings.remove(concat_type, "*", 1)
             }
             if strings.contains(concat_type, "const") {
                 is_const = true
-                concat_type = strings.trim_left(concat_type, "const")
+                concat_type, _ = strings.remove(concat_type, "const", 1)
             }
             if is_ptr && is_const && concat_type == "GLubyte" {
                 is_string = true
@@ -274,6 +275,7 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             } else if elem.ident == "ptype" {
                 concat_type = strings.concatenate({concat_type, elem.value[0].(string)})
             }
+            if param.name == "map" do param.name = "_map" // slight workaround
         }
     }
 
@@ -285,17 +287,16 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             param.type = "rawptr"
         case:
             is_const := false
-            is_ptr := false
+            ptr_count := 0
             is_string := false
-            if strings.contains(concat_type, "*") {
-                is_ptr = true // TODO: handle multi-pointers
-                concat_type = strings.trim_right(concat_type, "*")
+            if ptr_count = strings.count(concat_type, "*"); ptr_count > 0 {
+                concat_type, _ = strings.remove(concat_type, "*", ptr_count)
             }
             if strings.contains(concat_type, "const") {
                 is_const = true
-                concat_type = strings.trim_left(concat_type, "const")
+                concat_type, _ = strings.remove(concat_type, "const", 1)
             }
-            if is_ptr && is_const && concat_type == "GLubyte" {
+            if ptr_count == 1 && is_const && concat_type == "GLubyte" { // TODO handle [^]cstring
                 is_string = true
             }
             for attrib in param_elem.attribs {
@@ -306,20 +307,70 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             concat_type = strings.trim_space(concat_type)
             if is_string {
                 param.type = "cstring"
-            } else if is_ptr {
-                param.type = strings.concatenate({"^", concat_type}) 
+            } else if ptr_count > 0 {
+                for in 0..<ptr_count {
+                    param.type = strings.concatenate({param.type, "^"})
+                }
+                param.type = strings.concatenate({param.type, concat_type}) 
             }
         }
     }
     return param
 }
 
+generate_gl_def :: proc(state: ^State) -> (result: string) {
+    using strings
+    sb := strings.builder_make()
+    write_string(&sb, "package gl\n")
+    write_string(&sb, "import \"core:c\"\n")
+    write_string(&sb, "\n")
+
+    for name, def in state.gl_defs do if d, ok := def.(GL_Type); ok {
+        if strings.contains(name, "struct") do continue // Rework
+        fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
+    }
+
+    write_string(&sb, "\n")
+
+    for name, def in state.gl_defs do if d, ok := def.(GL_Enum_Value); ok {
+        if name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
+        fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.value)
+    }
+
+    write_string(&sb, "\n")
+
+    for name, def in state.gl_defs do if d, ok := def.(GL_Command); ok {
+        fmt.sbprintf(&sb, "impl_%s: proc \"c\"(", d.name)
+            for param, i in d.params {
+                fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
+                if i < len(d.params) - 1 {
+                    write_string(&sb, ", ")
+                }
+            }
+            write_string(&sb, ")")
+            if d.return_type != "" {
+                fmt.sbprintf(&sb, " -> %s", d.return_type)
+            }
+            write_string(&sb, "\n")
+    }
+
+    return strings.to_string(sb)
+}
 
 main :: proc() {
+    context.allocator = context.temp_allocator
     state: State
     gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
+    clock: time.Stopwatch
+    time.stopwatch_start(&clock)
     doc, err := xml.load_from_file(gl_xml_file, {flags =
 		{.Ignore_Unsupported, .Decode_SGML_Entities}})
+    time.stopwatch_stop(&clock)
+    xml_load_duration := time.stopwatch_duration(clock)
+    fmt.printf("XML Parse: %v ms\n", time.duration_milliseconds(xml_load_duration))
+    
+    time.stopwatch_reset(&clock)
+    time.stopwatch_start(&clock)
     for &element in doc.elements {
         switch element.ident {
         case "types": parse_gl_types(&state, doc, &element)
@@ -327,10 +378,12 @@ main :: proc() {
         case "commands": parse_gl_commands(&state, doc, &element)
         }
     }
-
-    for _, def in state.gl_defs {
-        if cmd, is_cmd := def.(GL_Command); is_cmd {
-            if cmd.return_type != "" do if len(cmd.params) != 0 do fmt.printf("%#v\n", cmd)
-        }
-    }
+    time.stopwatch_stop(&clock)
+    def_parse_duration := time.stopwatch_duration(clock)
+    fmt.printf("GL Definition Parse: %v ms\n", time.duration_milliseconds(def_parse_duration))
+    
+    file, ok := os.open("gl.odin", os.O_CREATE | os.O_TRUNC | os.O_WRONLY)
+    
+    gen := generate_gl_def(&state)
+    os.write_string(file, gen)
 }
