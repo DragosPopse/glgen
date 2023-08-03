@@ -223,6 +223,7 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
         }
     }
     concat_type = strings.trim_space(concat_type)
+    // This method of type parsing is quite empirical, it's not fully correct, but it seems to work with the current registry
     if concat_type != "void" {
         return_type = concat_type
         switch return_type {
@@ -259,7 +260,57 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
     return name, return_type
 }
 
+// This code is duplicated from parse_gl_command_proto. Refactor later.
 parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^xml.Element) -> (param: GL_Command_Param) {
+    concat_type: string
+    for value, i in param_elem.value {
+        switch v in value {
+        case string:
+            concat_type = strings.concatenate({concat_type, v, " "})
+        case xml.Element_ID:
+            elem := doc.elements[v]
+            if elem.ident == "name" {
+                param.name = elem.value[0].(string)
+            } else if elem.ident == "ptype" {
+                concat_type = strings.concatenate({concat_type, elem.value[0].(string)})
+            }
+        }
+    }
+
+    concat_type = strings.trim_space(concat_type)
+    if concat_type != "void" {
+        param.type = concat_type
+        switch param.type {
+        case "void*", "void *":
+            param.type = "rawptr"
+        case:
+            is_const := false
+            is_ptr := false
+            is_string := false
+            if strings.contains(concat_type, "*") {
+                is_ptr = true // TODO: handle multi-pointers
+                concat_type = strings.trim_right(concat_type, "*")
+            }
+            if strings.contains(concat_type, "const") {
+                is_const = true
+                concat_type = strings.trim_left(concat_type, "const")
+            }
+            if is_ptr && is_const && concat_type == "GLubyte" {
+                is_string = true
+            }
+            for attrib in param_elem.attribs {
+                if attrib.key == "kind" && attrib.val == "String" {
+                    is_string = true
+                }
+            }
+            concat_type = strings.trim_space(concat_type)
+            if is_string {
+                param.type = "cstring"
+            } else if is_ptr {
+                param.type = strings.concatenate({"^", concat_type}) 
+            }
+        }
+    }
     return param
 }
 
@@ -279,8 +330,7 @@ main :: proc() {
 
     for _, def in state.gl_defs {
         if cmd, is_cmd := def.(GL_Command); is_cmd {
-            if cmd.return_type != "" do fmt.printf("%v %v\n", cmd.return_type, cmd.name)
+            if cmd.return_type != "" do if len(cmd.params) != 0 do fmt.printf("%#v\n", cmd)
         }
-        
     }
 }
