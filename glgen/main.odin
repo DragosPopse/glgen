@@ -19,26 +19,28 @@ GL_Enum_Type :: enum {
     Bitmask,
 }
 
-// Note(Dragos): seems like some enum values are part of multiple groups, so it might be needed to make the groups part of the Enum_Value insetad
-GL_Enum_Group :: struct {
-    type: GL_Enum_Type,
-    name: string,
-    values: [dynamic]GL_Enum_Value,
-}
-
 GL_Enum_Value :: struct {
     name: string,
+    type: GL_Enum_Type,
     value: string,
     groups: []string, // OpenGL has enums that apply to multiple groups. We might want to handle that eventually
 }
 
+GL_Command_Param :: struct {
+    name: string,
+    type: string,
+}
+
 GL_Command :: struct {
-    
+    name: string,
+    return_type: string,
+    params: [dynamic]GL_Command_Param,    
 }
 
 GL_Def :: union {
     GL_Type,
     GL_Command,
+    GL_Enum_Value,
 }
 
 State :: struct {
@@ -47,14 +49,12 @@ State :: struct {
 
 
 
-parse_enums_elem :: proc(doc: ^xml.Document, enums_elem: ^xml.Element) -> (group: GL_Enum_Group) {
-    group.type = .Normal
+parse_enums_elem :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Element) {
+    enum_type: GL_Enum_Type = .Normal
     for attrib in enums_elem.attribs {
-        if attrib.key == "group" {
-            group.name = attrib.val
-        } else if attrib.key == "type" {
+        if attrib.key == "type" {
             switch attrib.val {
-            case "bitmask": group.type = .Bitmask
+            case "bitmask": enum_type = .Bitmask
             }
         }
     }
@@ -63,6 +63,8 @@ parse_enums_elem :: proc(doc: ^xml.Document, enums_elem: ^xml.Element) -> (group
         id := value.(xml.Element_ID)
         enum_elem := &doc.elements[id]
         enum_val: GL_Enum_Value
+        defer state.gl_defs[enum_val.name] = enum_val
+        enum_val.type = enum_type
         if enum_elem.ident == "enum" {
             for attrib in enum_elem.attribs {
                 if attrib.key == "value" {
@@ -73,10 +75,8 @@ parse_enums_elem :: proc(doc: ^xml.Document, enums_elem: ^xml.Element) -> (group
                     enum_val.groups = strings.split(attrib.val, ",")
                 }
             }
-            append(&group.values, enum_val)
         }
     } 
-    return group
 }
 
 parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Element) {
@@ -152,7 +152,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
             case "uint64": type.odin_type = "u64"
             case "intptr": type.odin_type = "intptr"
             case "uintptr": type.odin_type = "uintptr"
-            case "ssize": type.odin_type = "uint" // is this correct?
+            case "ssize": type.odin_type = "int" // is this correct?
             case:
                 if strings.contains(c_type, "struct") {
                     type.odin_type = "rawptr"
@@ -188,8 +188,9 @@ main :: proc() {
     doc, err := xml.load_from_file(gl_xml_file, {flags =
 		{.Ignore_Unsupported, .Decode_SGML_Entities}})
     for &element in doc.elements {
-        if element.ident == "types" {
-            parse_gl_types(&state, doc, &element)
+        switch element.ident {
+        case "types": parse_gl_types(&state, doc, &element)
+        case "enums": parse_enums_elem(&state, doc, &element)\
         }
     }
 
