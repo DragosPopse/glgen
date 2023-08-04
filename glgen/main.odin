@@ -82,7 +82,7 @@ parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Eleme
 
 parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Element) {
     using state
-    for value in types_elem.value {
+    main_loop: for value in types_elem.value {
         type_elem_id := value.(xml.Element_ID)
         type_elem := doc.elements[type_elem_id]
         type: GL_Type
@@ -164,23 +164,24 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
         } else {
             // handle special cases to save sanity
             switch type.name {
-            case "GLDEBUGPROC": type.odin_type = `#type proc "c" (source, type: GLEnum, id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLDEBUGPROCARB": type.odin_type = `#type proc "c" (source, type: GLEnum, id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLDEBUGPROCKHR": type.odin_type = `#type proc "c" (source, type: GLEnum, id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: GLuint, category: GLenum, severity: GLEnum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLhandleARB": type.odin_type = `u32 when ODIN_OS != .darwin else rawptr`
+            case "GLDEBUGPROC": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCARB": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCKHR": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLhandleARB": type.odin_type = `u32 when ODIN_OS != .Darwin else rawptr`
             case "khrplatform": // this is nonsense
-            case "GLVULKANPROCNV": type.odin_type = `nil`
+            case "GLVULKANPROCNV": type.odin_type = `#type proc() // undefined`
             case: fmt.panicf("Unhandled special case %v\n", type.name)
             }
         }
         
-        if type.name != "khrplatform" {
+        if type.name != "khrplatform" && type.c_type != "void" {
             gl_defs[type.name] = type
         }
         
         // note(dragos): we should assert that the type.name not_in gl_defs
     }
+    
 }
 
 parse_gl_commands :: proc(state: ^State, doc: ^xml.Document, element: ^xml.Element) {
@@ -275,7 +276,11 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             } else if elem.ident == "ptype" {
                 concat_type = strings.concatenate({concat_type, elem.value[0].(string)})
             }
+            // Scuffed way to handle some keywords
             if param.name == "map" do param.name = "_map" // slight workaround
+            else if param.name == "in" do param.name = "_in"
+            else if param.name == "matrix" do param.name = "_matrix"
+            else if param.name == "context" do param.name = "_context"
         }
     }
 
@@ -283,8 +288,8 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
     if concat_type != "void" {
         param.type = concat_type
         switch param.type {
-        case "void*", "void *":
-            param.type = "rawptr"
+        //case "void*", "void *":
+            //param.type = "rawptr"
         case:
             is_const := false
             ptr_count := 0
@@ -294,7 +299,7 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             }
             if strings.contains(concat_type, "const") {
                 is_const = true
-                concat_type, _ = strings.remove(concat_type, "const", 1)
+                concat_type, _ = strings.remove_all(concat_type, "const")
             }
             if ptr_count == 1 && is_const && concat_type == "GLubyte" { // TODO handle [^]cstring
                 is_string = true
@@ -304,10 +309,18 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
                     is_string = true
                 }
             }
+            
             concat_type = strings.trim_space(concat_type)
-            if is_string {
-                param.type = "cstring"
+            if strings.contains(concat_type, "struct") { // Todo: Make a special type for these
+                param.type = "rawptr"
+            } else if is_string {
+                param.type = "cstring" // TODO: Handle [^]cstring
             } else if ptr_count > 0 {
+                param.type = ""
+                if strings.contains(concat_type, "void") {
+                    ptr_count -= 1
+                    concat_type = "rawptr"
+                }
                 for in 0..<ptr_count {
                     param.type = strings.concatenate({param.type, "^"})
                 }
@@ -326,7 +339,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     write_string(&sb, "\n")
 
     for name, def in state.gl_defs do if d, ok := def.(GL_Type); ok {
-        if strings.contains(name, "struct") do continue // Rework
+        if strings.contains(name, "struct") || name == "GLvoid" do continue // Rework
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
     }
 
@@ -382,8 +395,13 @@ main :: proc() {
     def_parse_duration := time.stopwatch_duration(clock)
     fmt.printf("GL Definition Parse: %v ms\n", time.duration_milliseconds(def_parse_duration))
     
-    file, ok := os.open("gl.odin", os.O_CREATE | os.O_TRUNC | os.O_WRONLY)
     
+    time.stopwatch_reset(&clock)
+    time.stopwatch_start(&clock)
+    file, ok := os.open("gl.odin", os.O_CREATE | os.O_TRUNC | os.O_WRONLY)
     gen := generate_gl_def(&state)
     os.write_string(file, gen)
+    time.stopwatch_stop(&clock)
+    def_gen_duration := time.stopwatch_duration(clock)
+    fmt.printf("gl.odin Generation: %v ms\n", time.duration_milliseconds(def_gen_duration))
 }
