@@ -61,11 +61,15 @@ State :: struct {
 }
 
 remove_gl_prefix :: proc(str: string) -> string {
+    if strings.has_prefix(str, "GL_") {
+        if str[3] >= '0' && str[3] <= '9' {
+            // it starts with a number, so don't remove the underline
+            return str[2:]
+        }
+        return str[3:]
+    }
     if strings.has_prefix(str, "GL") || strings.has_prefix(str, "gl") {
         return str[2:]
-    }
-    if strings.has_prefix(str, "GL_") {
-        return str[3:]
     }
     return str
 }
@@ -110,7 +114,10 @@ parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Eleme
         enum_elem := &doc.elements[id]
         value, name: string
         groups: []string
-        defer {
+        // Note: The check is a workaround. See GL_ACTIVE_PROGRAM_EXT. Need a way to handle that speifically for that extension
+        defer if name := remove_gl_prefix(name); name not_in state.gl_defs {
+            
+           
             enum_val := new_gl_def(state, name, GL_Enum_Value)
             enum_val.type = enum_type
             enum_val.value = value
@@ -208,17 +215,17 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
                 if strings.contains(c_type, "struct") {
                     type.odin_type = "rawptr"
                 } else {
-                    type.odin_type = c_type
+                    type.odin_type = remove_gl_prefix(c_type)
                 }
             }
             if type.name == "GLboolean" do type.odin_type = "bool"
         } else {
             // handle special cases to save sanity
             switch type.name {
-            case "GLDEBUGPROC": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLDEBUGPROCARB": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLDEBUGPROCKHR": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROC": type.odin_type = `#type proc "c" (source, type: Enum, id: uint, category: Enum, severity: Enum, length: sizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCARB": type.odin_type = `#type proc "c" (source, type: Enum, id: uint, category: Enum, severity: Enum, length: sizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCKHR": type.odin_type = `#type proc "c" (source, type: Enum, id: uint, category: Enum, severity: Enum, length: sizei, message: cstring, userParam: rawptr)`
+            case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: uint, category: Enum, severity: Enum, length: sizei, message: cstring, userParam: rawptr)`
             case "GLhandleARB": type.odin_type = `builtin.u32 when ODIN_OS != .Darwin else rawptr`
             case "khrplatform": // this is nonsense
             case "GLVULKANPROCNV": type.odin_type = `#type proc() // undefined`
@@ -227,6 +234,8 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
         }
         
         if type.name != "khrplatform" && type.c_type != "void" {
+            type.name = remove_gl_prefix(type.name)
+            if type.name == "enum" do type.name = "Enum" 
             gl_type := new_gl_def(state, type.name, GL_Type)
             gl_type^ = type
         }
@@ -271,7 +280,7 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
         case xml.Element_ID:
             elem := doc.elements[v]
             if elem.ident == "name" {
-                name = elem.value[0].(string)
+                name = remove_gl_prefix(elem.value[0].(string))
             } else if elem.ident == "ptype" {
                 concat_type = strings.concatenate({concat_type, elem.value[0].(string)})
             }
@@ -280,9 +289,9 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
     concat_type = strings.trim_space(concat_type)
     // This method of type parsing is quite empirical, it's not fully correct, but it seems to work with the current registry
     if concat_type != "void" {
-        return_type = concat_type
-        switch return_type {
-        case "void*", "void *":
+        //return_type = concat_type
+        switch concat_type {
+        case "void*", "void *", "GLvoid*", "GLvoid *":
             return_type = "rawptr"
         case:
             is_const := false
@@ -305,10 +314,14 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
                 }
             }
             concat_type = strings.trim_space(concat_type)
+            concat_type = remove_gl_prefix(concat_type)
+            if concat_type == "enum" do concat_type = "Enum"
             if is_string {
                 return_type = "cstring"
             } else if is_ptr {
                 return_type = strings.concatenate({"^", concat_type}) 
+            } else {
+                return_type = concat_type
             }
         }
     }
@@ -339,7 +352,6 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
 
     concat_type = strings.trim_space(concat_type)
     if concat_type != "void" {
-        param.type = concat_type
         switch param.type {
         //case "void*", "void *":
             //param.type = "rawptr"
@@ -364,6 +376,8 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             }
             
             concat_type = strings.trim_space(concat_type)
+            concat_type = remove_gl_prefix(concat_type)
+            if concat_type == "enum" do concat_type = "Enum"
             if strings.contains(concat_type, "struct") { // Todo: Make a special type for these
                 param.type = "rawptr"
             } else if is_string {
@@ -383,6 +397,8 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
                     param.type = strings.concatenate({param.type, "[^]"})
                 }
                 param.type = strings.concatenate({param.type, concat_type}) 
+            } else {
+                param.type = concat_type
             }
         }
     }
@@ -398,7 +414,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     write_string(&sb, "\n")
 
     for d in state.gl_types {
-        if strings.contains(d.name, "struct") || d.name == "GLvoid" do continue // Rework
+        if strings.contains(d.name, "struct") || d.name == "GLvoid" || d.name == "void" do continue // Rework
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
     }
 
