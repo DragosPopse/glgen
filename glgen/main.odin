@@ -39,15 +39,59 @@ GL_Command :: struct {
 }
 
 GL_Def :: union {
-    GL_Type,
-    GL_Command,
-    GL_Enum_Value,
+    ^GL_Type,
+    ^GL_Command,
+    ^GL_Enum_Value,
+}
+
+Gen_Options :: struct {
+    use_odin_types: bool,
+    gen_debug_helpers: bool,
+    gen_enum_types: bool,
+    remove_gl_prefix: bool,
 }
 
 State :: struct {
+    opts: Gen_Options,
     gl_defs: map[string]GL_Def,
+    gl_enums: [dynamic]^GL_Enum_Value,
+    gl_commands: [dynamic]^GL_Command,
+    gl_types: [dynamic]^GL_Type,
 }
 
+remove_gl_prefix :: proc(str: string) -> string {
+    if strings.has_prefix(str, "GL") || strings.has_prefix(str, "gl") {
+        return str[2:]
+    }
+    if strings.has_prefix(str, "GL_") {
+        return str[3:]
+    }
+    return str
+}
+
+new_gl_def :: proc(state: ^State, name: string, $Type: typeid) -> ^Type {
+    when Type == GL_Enum_Value {
+        def := new(GL_Enum_Value)
+        append(&state.gl_enums, def)
+        def.name = name
+        state.gl_defs[def.name] = def
+        return def
+    } else when Type == GL_Command {
+        def := new(GL_Command)
+        append(&state.gl_commands, def)
+        def.name = name
+        state.gl_defs[def.name] = def
+        return def
+    } else when Type == GL_Type {
+        def := new(GL_Type)
+        append(&state.gl_types, def)
+        def.name = name
+        state.gl_defs[def.name] = def
+        return def
+    } else {
+        #panic("Unknown type for new_gl_def")
+    }
+}
 
 
 parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Element) {
@@ -63,17 +107,22 @@ parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Eleme
     for value in enums_elem.value {
         id := value.(xml.Element_ID)
         enum_elem := &doc.elements[id]
-        enum_val: GL_Enum_Value
-        defer state.gl_defs[enum_val.name] = enum_val
-        enum_val.type = enum_type
+        value, name: string
+        groups: []string
+        defer {
+            enum_val := new_gl_def(state, name, GL_Enum_Value)
+            enum_val.type = enum_type
+            enum_val.value = value
+            enum_val.groups = groups
+        }
         if enum_elem.ident == "enum" {
             for attrib in enum_elem.attribs {
                 if attrib.key == "value" {
-                    enum_val.value = attrib.val
+                    value = attrib.val
                 } else if attrib.key == "name" {
-                    enum_val.name = attrib.val
+                    name = attrib.val
                 } else if attrib.key == "group" {
-                    enum_val.groups = strings.split(attrib.val, ",")
+                    groups = strings.split(attrib.val, ",")
                 }
             }
         }
@@ -161,6 +210,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
                     type.odin_type = c_type
                 }
             }
+            if type.name == "GLboolean" do type.odin_type = "bool"
         } else {
             // handle special cases to save sanity
             switch type.name {
@@ -176,7 +226,8 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
         }
         
         if type.name != "khrplatform" && type.c_type != "void" {
-            gl_defs[type.name] = type
+            gl_type := new_gl_def(state, type.name, GL_Type)
+            gl_type^ = type
         }
         
         // note(dragos): we should assert that the type.name not_in gl_defs
@@ -190,7 +241,8 @@ parse_gl_commands :: proc(state: ^State, doc: ^xml.Document, element: ^xml.Eleme
         command_elem := &doc.elements[command_elem_id]
         if command_elem.ident == "command" {
             command := parse_gl_command(state, doc, command_elem)
-            state.gl_defs[command.name] = command
+            gl_command := new_gl_def(state, command.name, GL_Command)
+            gl_command^ = command
         }
     }
 }
@@ -301,7 +353,7 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
                 is_const = true
                 concat_type, _ = strings.remove_all(concat_type, "const")
             }
-            if ptr_count == 1 && is_const && concat_type == "GLubyte" { // TODO handle [^]cstring
+            if ptr_count > 0 && is_const && (concat_type == "GLubyte" || concat_type == "GLchar") { // TODO handle [^]cstring
                 is_string = true
             }
             for attrib in param_elem.attribs {
@@ -314,7 +366,12 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             if strings.contains(concat_type, "struct") { // Todo: Make a special type for these
                 param.type = "rawptr"
             } else if is_string {
-                param.type = "cstring" // TODO: Handle [^]cstring
+                param.type = ""
+                ptr_count -= 1
+                for in 0..<ptr_count {
+                    param.type = strings.concatenate({param.type, "[^]"})
+                }
+                param.type = strings.concatenate({param.type, "cstring"})
             } else if ptr_count > 0 {
                 param.type = ""
                 if strings.contains(concat_type, "void") {
@@ -322,7 +379,7 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
                     concat_type = "rawptr"
                 }
                 for in 0..<ptr_count {
-                    param.type = strings.concatenate({param.type, "^"})
+                    param.type = strings.concatenate({param.type, "[^]"})
                 }
                 param.type = strings.concatenate({param.type, concat_type}) 
             }
@@ -338,21 +395,21 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     write_string(&sb, "import \"core:c\"\n")
     write_string(&sb, "\n")
 
-    for name, def in state.gl_defs do if d, ok := def.(GL_Type); ok {
-        if strings.contains(name, "struct") || name == "GLvoid" do continue // Rework
+    for d in state.gl_types {
+        if strings.contains(d.name, "struct") || d.name == "GLvoid" do continue // Rework
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
     }
 
     write_string(&sb, "\n")
 
-    for name, def in state.gl_defs do if d, ok := def.(GL_Enum_Value); ok {
-        if name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
+    for d in state.gl_enums {
+        if d.name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.value)
     }
 
     write_string(&sb, "\n")
 
-    for name, def in state.gl_defs do if d, ok := def.(GL_Command); ok {
+    for d in state.gl_commands {
         fmt.sbprintf(&sb, "impl_%s: proc \"c\"(", d.name)
             for param, i in d.params {
                 fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
