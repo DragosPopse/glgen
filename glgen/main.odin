@@ -45,10 +45,11 @@ GL_Def :: union {
 }
 
 Gen_Options :: struct {
-    use_odin_types: bool,
-    gen_debug_helpers: bool,
-    gen_enum_types: bool,
-    remove_gl_prefix: bool,
+    use_odin_types: bool, // burn GLint and other nonsense to the ground, use raw odin types
+    // Note: GLhandleARB will still be needed as it's #ifdef'd 
+    gen_debug_helpers: bool, // #config(GL_DEBUG, true) helpers
+    gen_enum_types: bool, // Generate distinct types for enum groups
+    // remove_gl_prefix: bool, This should always happen
 }
 
 State :: struct {
@@ -182,27 +183,27 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
             c_type = strings.trim_prefix(c_type, "khronos_")
             c_type = strings.trim_suffix(c_type, "_t")
             switch c_type {
-            case "unsigned int": type.odin_type = "u32"
-            case "int": type.odin_type = "i32"
-            case "short": type.odin_type = "i16"
-            case "unsigned short": type.odin_type = "u16"
-            case "unsigned char": type.odin_type = "u8"
-            case "char": type.odin_type = "i8"
+            case "unsigned int": type.odin_type = "builtin.u32"
+            case "int": type.odin_type = "builtin.i32"
+            case "short": type.odin_type = "builtin.i16"
+            case "unsigned short": type.odin_type = "builtin.u16"
+            case "unsigned char": type.odin_type = "builtin.u8"
+            case "char": type.odin_type = "builtin.i8"
             case "void": type.odin_type = "void" // this should be invalid
             case "void*", "void *": type.odin_type = "rawptr"
-            case "float": type.odin_type = "f32"
-            case "double": type.odin_type = "f64"
-            case "int8": type.odin_type = "i8"
-            case "uint8": type.odin_type = "u8"
-            case "int16": type.odin_type = "i16"
-            case "uint16": type.odin_type = "u16"
-            case "int32": type.odin_type = "i32"
-            case "uint32": type.odin_type = "u32"
-            case "int64": type.odin_type = "i64"
-            case "uint64": type.odin_type = "u64"
-            case "intptr": type.odin_type = "int"
-            case "uintptr": type.odin_type = "uintptr"
-            case "ssize": type.odin_type = "int" // is this correct?
+            case "float": type.odin_type = "builtin.f32"
+            case "double": type.odin_type = "builtin.f64"
+            case "int8": type.odin_type = "builtin.i8"
+            case "uint8": type.odin_type = "builtin.u8"
+            case "int16": type.odin_type = "builtin.i16"
+            case "uint16": type.odin_type = "builtin.u16"
+            case "int32": type.odin_type = "builtin.i32"
+            case "uint32": type.odin_type = "builtin.u32"
+            case "int64": type.odin_type = "builtin.i64"
+            case "uint64": type.odin_type = "builtin.u64"
+            case "intptr": type.odin_type = "builtin.int"
+            case "uintptr": type.odin_type = "builtin.uintptr"
+            case "ssize": type.odin_type = "builtin.int" // is this correct?
             case:
                 if strings.contains(c_type, "struct") {
                     type.odin_type = "rawptr"
@@ -218,7 +219,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
             case "GLDEBUGPROCARB": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
             case "GLDEBUGPROCKHR": type.odin_type = `#type proc "c" (source, type: GLenum, id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
             case "GLDEBUGPROCAMD": type.odin_type = `#type proc "c" (id: GLuint, category: GLenum, severity: GLenum, length: GLsizei, message: cstring, userParam: rawptr)`
-            case "GLhandleARB": type.odin_type = `u32 when ODIN_OS != .Darwin else rawptr`
+            case "GLhandleARB": type.odin_type = `builtin.u32 when ODIN_OS != .Darwin else rawptr`
             case "khrplatform": // this is nonsense
             case "GLVULKANPROCNV": type.odin_type = `#type proc() // undefined`
             case: fmt.panicf("Unhandled special case %v\n", type.name)
@@ -393,6 +394,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     sb := strings.builder_make()
     write_string(&sb, "package gl\n")
     write_string(&sb, "import \"core:c\"\n")
+    write_string(&sb, "import \"core:builtin\"\n")
     write_string(&sb, "\n")
 
     for d in state.gl_types {
@@ -430,6 +432,11 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
 main :: proc() {
     context.allocator = context.temp_allocator
     state: State
+    {
+        using state
+        opts.use_odin_types = true
+        //opts.remove_gl_prefix = true
+    }
     gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
     clock: time.Stopwatch
     time.stopwatch_start(&clock)
