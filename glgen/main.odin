@@ -426,7 +426,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     write_string(&sb, "\n")
 
     for d in state.gl_commands {
-        fmt.sbprintf(&sb, "impl_%s: proc \"c\"(", d.name)
+        fmt.sbprintf(&sb, "impl_%s: proc \"c\" (", d.name)
             for param, i in d.params {
                 fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
                 if i < len(d.params) - 1 {
@@ -440,8 +440,38 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
             write_string(&sb, "\n")
     }
 
+    write_string(&sb, "\n\n")
+    write_string(&sb, "// Wrappers\n")
+
+    for d in state.gl_commands {
+        fmt.sbprintf(&sb, "%s :: proc \"c\" (", d.name)
+        for param, i in d.params {
+            fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
+            if i < len(d.params) - 1 {
+                write_string(&sb, ", ")
+            }
+        }
+        write_string(&sb, ")")
+        if d.return_type != "" {
+            fmt.sbprintf(&sb, " -> %s", d.return_type)
+        }
+        fmt.sbprintf(&sb, " {{\n")
+        fmt.sbprintf(&sb, "    impl_%s(", d.name)
+        for param, i in d.params {
+            fmt.sbprintf(&sb, "%s", param.name)
+            if i < len(d.params) - 1 {
+                write_string(&sb, ", ")
+            }
+        }
+        write_string(&sb, ")\n")
+        write_string(&sb, "}\n\n")
+        write_string(&sb, "\n")
+    }
+
     return strings.to_string(sb)
 }
+
+
 
 main :: proc() {
     context.allocator = context.temp_allocator
