@@ -114,6 +114,7 @@ parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Eleme
         enum_elem := &doc.elements[id]
         value, name: string
         groups: []string
+        // Mega-Note: It seems that GL_ACTIVE_PROGRAM_EXT has api="gles2", so maybe we can check for those for different APIs. Need to check in the commands code aswell
         // Note: The check is a workaround. See GL_ACTIVE_PROGRAM_EXT. Need a way to handle that speifically for that extension
         defer if name := remove_gl_prefix(name); name not_in state.gl_defs {
             enum_val := new_gl_def(state, name, GL_Enum_Value)
