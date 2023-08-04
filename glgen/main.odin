@@ -116,8 +116,6 @@ parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Eleme
         groups: []string
         // Note: The check is a workaround. See GL_ACTIVE_PROGRAM_EXT. Need a way to handle that speifically for that extension
         defer if name := remove_gl_prefix(name); name not_in state.gl_defs {
-            
-           
             enum_val := new_gl_def(state, name, GL_Enum_Value)
             enum_val.type = enum_type
             enum_val.value = value
@@ -296,14 +294,14 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
         case:
             is_const := false
             is_ptr := false
-            is_string := false
+            is_string := false // we still got issues with strings
             if strings.contains(concat_type, "*") {
                 is_ptr = true
                 concat_type, _ = strings.remove(concat_type, "*", 1)
             }
             if strings.contains(concat_type, "const") {
                 is_const = true
-                concat_type, _ = strings.remove(concat_type, "const", 1)
+                concat_type, _ = strings.remove_all(concat_type, "const")
             }
             if is_ptr && is_const && concat_type == "GLubyte" {
                 is_string = true
