@@ -505,11 +505,11 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
         if d.return_type != "" {
             fmt.sbprintf(&sb, " -> %s", d.return_type)
         }
-        fmt.sbprintf(&sb, " {{\n")
+        fmt.sbprintf(&sb, " {{ ")
         if d.return_type != "" {
-            fmt.sbprintf(&sb, "    return impl_%s(", d.name)
+            fmt.sbprintf(&sb, "return impl_%s(", d.name)
         } else {
-            fmt.sbprintf(&sb, "    impl_%s(", d.name)
+            fmt.sbprintf(&sb, "impl_%s(", d.name)
         }
         for param, i in d.params {
             fmt.sbprintf(&sb, "%s", param.name)
@@ -517,9 +517,9 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
                 write_string(&sb, ", ")
             }
         }
-        write_string(&sb, ")\n")
-        write_string(&sb, "}\n\n")
-        write_string(&sb, "\n")
+        write_string(&sb, ")")
+        write_string(&sb, " }\n")
+        
     }
 
     return strings.to_string(sb)
@@ -598,8 +598,8 @@ main :: proc() {
     {
         using state
         opts.use_odin_types = true
-        opts.version.major = 3
-        opts.version.minor = 3
+        opts.version.major = 4
+        opts.version.minor = 6
         opts.version.profile = .Core
         //opts.remove_gl_prefix = true
     }
