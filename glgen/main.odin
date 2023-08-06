@@ -9,40 +9,7 @@ import "core:strings"
 import cfront "core:c/frontend"
 import "core:time"
 
-GL_Type :: struct {
-    name: string,
-    c_type: string,
-    odin_type: string, // to be determined from c_type
-}
 
-GL_Enum_Type :: enum {
-    Normal,
-    Bitmask,
-}
-
-GL_Enum_Value :: struct {
-    name: string,
-    type: GL_Enum_Type,
-    value: string,
-    groups: []string, // OpenGL has enums that apply to multiple groups. We might want to handle that eventually
-}
-
-GL_Command_Param :: struct {
-    name: string,
-    type: string,
-}
-
-GL_Command :: struct {
-    name: string,
-    return_type: string,
-    params: [dynamic]GL_Command_Param,    
-}
-
-GL_Def :: union {
-    ^GL_Type,
-    ^GL_Command,
-    ^GL_Enum_Value,
-}
 
 GL_Profile :: enum {
     Compatibility,
@@ -73,40 +40,14 @@ GL_Version :: struct {
     extensions: map[string]bool,
 }
 
-Gen_Options :: struct {
-    use_odin_types: bool, 
-    // Note: GLhandleARB will still be needed as it's #ifdef'd 
-    gen_debug_helpers: bool, // #config(GL_DEBUG, true) helpers
-    gen_enum_types: bool, // Generate distinct types for enum groups
-    version: GL_Version,
-}
 
-GL_Registry :: struct {
-    all_defs: map[string]GL_Def,
-    enums: [dynamic]^GL_Enum_Value,
-    commands: [dynamic]^GL_Command,
-    types: [dynamic]^GL_Type,
-}
-
-GL_Feature_Set :: distinct map[string]bool
-feature_set_add :: proc(set: ^GL_Feature_Set, name: string) {
-    map_insert(set, name, true)
-}
-
-feature_set_remove :: proc(set: ^GL_Feature_Set, name: string) {
-    delete_key(set, name)
-}
-
-feature_exists :: proc(set: GL_Feature_Set, name: string) -> bool {
-    return name in set
-}
 
 State :: struct {
     opts: Gen_Options,
     registry: GL_Registry,
-    feature_set: GL_Feature_Set,
 }
 
+// This should be called in the gen code
 remove_gl_prefix :: proc(str: string) -> string {
     if strings.has_prefix(str, "GL_") {
         if str[3] >= '0' && str[3] <= '9' {
@@ -119,30 +60,6 @@ remove_gl_prefix :: proc(str: string) -> string {
         return str[2:]
     }
     return str
-}
-
-registry_new_def :: proc(registry: ^GL_Registry, name: string, $Type: typeid) -> ^Type {
-    when Type == GL_Enum_Value {
-        def := new(GL_Enum_Value)
-        append(&registry.enums, def)
-        def.name = name
-        registry.all_defs[def.name] = def
-        return def
-    } else when Type == GL_Command {
-        def := new(GL_Command)
-        append(&registry.commands, def)
-        def.name = name
-        registry.all_defs[def.name] = def
-        return def
-    } else when Type == GL_Type {
-        def := new(GL_Type)
-        append(&registry.types, def)
-        def.name = name
-        registry.all_defs[def.name] = def
-        return def
-    } else {
-        #panic("Unknown type for new_gl_def")
-    }
 }
 
 
@@ -163,8 +80,8 @@ parse_gl_enums :: proc(state: ^State, doc: ^xml.Document, enums_elem: ^xml.Eleme
         groups: []string
         // Mega-Note: It seems that GL_ACTIVE_PROGRAM_EXT has api="gles2", so maybe we can check for those for different APIs. Need to check in the commands code aswell
         // Note: The check is a workaround. See GL_ACTIVE_PROGRAM_EXT. Need a way to handle that speifically for that extension
-        defer if name := remove_gl_prefix(name); name not_in state.registry.all_defs && feature_exists(state.feature_set, name) {
-            enum_val := registry_new_def(&state.registry, name, GL_Enum_Value)
+        defer if definition_exists(&state.registry, name) {
+            enum_val := get_registered_enum(&state.registry, name)
             enum_val.type = enum_type
             enum_val.value = value
             enum_val.groups = groups
@@ -282,8 +199,12 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
         if type.name != "khrplatform" && type.c_type != "void" {
             type.name = remove_gl_prefix(type.name)
             if type.name == "enum" do type.name = "Enum" 
-            gl_type := registry_new_def(&state.registry, type.name, GL_Type)
+            //gl_type := registry_new_def(&state.registry, type.name, GL_Type)
+            //gl_type^ = type
+            gl_type := new(GL_Type)
             gl_type^ = type
+            registry.all_defs[gl_type.name] = gl_type
+            append(&registry.types, gl_type)
         }
         
         // note(dragos): we should assert that the type.name not_in gl_defs
@@ -297,8 +218,8 @@ parse_gl_commands :: proc(state: ^State, doc: ^xml.Document, element: ^xml.Eleme
         command_elem := &doc.elements[command_elem_id]
         if command_elem.ident == "command" {
             command := parse_gl_command(state, doc, command_elem)
-            if feature_exists(state.feature_set, command.name) {
-                gl_command := registry_new_def(&state.registry, command.name, GL_Command)
+            if definition_exists(&state.registry, command.name) {
+                gl_command := get_registered_command(&state.registry, command.name)
                 gl_command^ = command
             }
         }
@@ -453,6 +374,16 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
     return param
 }
 
+
+
+parse_gl_version :: proc(v: string) -> (major, minor: int) {
+    versions := strings.split(v, ".")
+    major = int(versions[0][0] - '0')
+    minor = int(versions[1][0] - '0')
+    return major, minor
+}
+
+
 generate_gl_def :: proc(state: ^State) -> (result: string) {
     using strings
     sb := strings.builder_make()
@@ -468,14 +399,14 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
 
     write_string(&sb, "\n")
 
-    for d in state.registry.enums {
+    for f in state.registry.features do for d in f.enums {
         if d.name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.value)
     }
 
     write_string(&sb, "\n")
 
-    for d in state.registry.commands {
+    for f in state.registry.features do for d in f.commands {
         fmt.sbprintf(&sb, "impl_%s: proc \"c\" (", d.name)
             for param, i in d.params {
                 fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
@@ -493,7 +424,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     write_string(&sb, "\n\n")
     write_string(&sb, "// Wrappers\n")
 
-    for d in state.registry.commands {
+    for f in state.registry.features do for d in f.commands {
         fmt.sbprintf(&sb, "%s :: proc \"c\" (", d.name)
         for param, i in d.params {
             fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
@@ -525,73 +456,6 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     return strings.to_string(sb)
 }
 
-parse_gl_version :: proc(v: string) -> (major, minor: int) {
-    versions := strings.split(v, ".")
-    major = int(versions[0][0] - '0')
-    minor = int(versions[1][0] - '0')
-    return major, minor
-}
-
-parse_feature_set :: proc(doc: ^xml.Document, version: GL_Version) -> (features: GL_Feature_Set) {
-    //features_to_remove: [dynamic]string // We'll remove them at the end in case parsing doesn't happen in order
-    
-    for feat_elem in doc.elements do if feat_elem.ident == "feature" {
-        api, name, number: string
-        for attrib in feat_elem.attribs {
-            switch attrib.key {
-            case "api": api = attrib.val
-            case "name": name = attrib.val
-            case "number": number = attrib.val
-            }
-        }
-        major, minor := parse_gl_version(number)
-        features_profile: Maybe(GL_Profile)
-        if version.major < major do continue
-        if version.minor < minor do continue
-        features_loop: for tag_id in feat_elem.value do if tag_id, is_tag := tag_id.(xml.Element_ID); is_tag {
-            if require_tag := doc.elements[tag_id]; require_tag.ident == "require" {
-                profile_str: string
-                for attrib in require_tag.attribs do if attrib.key == "profile" {
-                    profile_str = attrib.val
-                }
-                if profile_str == "compatibility" && version.profile == .Core {
-                    continue features_loop
-                }
-                for tag_id in require_tag.value do if tag_id, is_tag := tag_id.(xml.Element_ID); is_tag {
-                    feature_tag := doc.elements[tag_id]
-                    if feature_tag.ident == "enum" || feature_tag.ident == "command" { // we ignore <type> since it's goofy anyway
-                        for attrib in feature_tag.attribs do if attrib.key == "name" {
-                            feature_name := remove_gl_prefix(attrib.val)
-                            feature_set_add(&features, feature_name)
-                        }
-                    }
-                }
-            } else if remove_tag := doc.elements[tag_id]; remove_tag.ident == "remove" {
-                profile_str: string
-                for attrib in remove_tag.attribs do if attrib.key == "profile" {
-                    profile_str = attrib.val
-                }
-                if !(profile_str == "core" && version.profile == .Core || profile_str == "compatibility" && version.profile == .Compatibility) {
-                    continue features_loop
-                }
-                for tag_id in remove_tag.value do if tag_id, is_tag := tag_id.(xml.Element_ID); is_tag {
-                    feature_tag := doc.elements[tag_id]
-                    if feature_tag.ident == "enum" || feature_tag.ident == "command" {
-                        for attrib in feature_tag.attribs do if attrib.key == "name" {
-                            feature_name := remove_gl_prefix(attrib.val)
-                            feature_set_remove(&features, feature_name)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-  
-    return features
-}
-
-
 main :: proc() {
     context.allocator = context.temp_allocator
     state: State
@@ -601,7 +465,7 @@ main :: proc() {
         opts.version.major = 4
         opts.version.minor = 6
         opts.version.profile = .Core
-        //opts.remove_gl_prefix = true
+        opts.remove_gl_prefix = true
     }
     gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
     clock: time.Stopwatch
@@ -614,7 +478,7 @@ main :: proc() {
     
     time.stopwatch_reset(&clock)
     time.stopwatch_start(&clock)
-    state.feature_set = parse_feature_set(doc, state.opts.version)
+    register_features_and_extensions(doc, &state.registry, state.opts.version)
     for &element in doc.elements {
         switch element.ident {
         case "types": parse_gl_types(&state, doc, &element)
