@@ -280,8 +280,9 @@ register_features_and_extensions :: proc(doc: ^xml.Document, registry: ^GL_Regis
                 }
                 switch tag.ident {
                 case "enum":
-                    
+                    register_extension_enum(registry, name, require_name)
                 case "command":
+                    register_extension_command(registry, name, require_name)
                 }
             }
         }
