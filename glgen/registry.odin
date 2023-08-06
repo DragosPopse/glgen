@@ -96,6 +96,16 @@ register_feature_enum :: proc(registry: ^GL_Registry, feature_name: string, def_
     append(&feature.enums, e)
 }
 
+register_extension_enum :: proc(registry: ^GL_Registry, extension_name: string, def_name: string) {
+    fmt.assertf(def_name not_in registry.all_defs, "%v enum is already registered", def_name)
+    fmt.assertf(extension_name in registry.all_extensions, "%v feature does not exist", extension_name)
+    extension := registry.all_extensions[extension_name]
+    e := new(GL_Enum_Value)
+    e.name = def_name
+    registry.all_defs[def_name] = e
+    append(&extension.enums, e)
+}
+
 register_feature_command :: proc(registry: ^GL_Registry, feature_name: string, def_name: string) {
     fmt.assertf(def_name not_in registry.all_defs, "%v command already exists", def_name)
     fmt.assertf(feature_name in registry.all_features, "%v feature doesn't exist", feature_name)
@@ -106,6 +116,19 @@ register_feature_command :: proc(registry: ^GL_Registry, feature_name: string, d
     append(&feature.commands, c)
 }
 
+register_extension_command :: proc(registry: ^GL_Registry, extension_name: string, def_name: string) {
+    fmt.assertf(def_name not_in registry.all_defs, "%v command already exists", def_name)
+    fmt.assertf(extension_name in registry.all_features, "%v feature doesn't exist", extension_name)
+    extension := registry.all_extensions[extension_name]
+    c := new(GL_Command)
+    c.name = def_name
+    registry.all_defs[def_name] = c
+    append(&extension.commands, c)
+}
+
+
+// Note: The feature_name is not really needed here, it's dumb
+// Note: we'll loop only through the features, since the extensions don't seem to have remove tags
 remove_enum :: proc(registry: ^GL_Registry, feature_name: string, def_name: string) {
     fmt.assertf(def_name in registry.all_defs, "%v enum does not exist for removal", def_name)
     fmt.assertf(feature_name in registry.all_features, "%v feature does not exist", feature_name)
@@ -221,6 +244,44 @@ register_features_and_extensions :: proc(doc: ^xml.Document, registry: ^GL_Regis
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    extensions_loop: for extension_element in doc.elements do if extension_element.ident == "extension" { 
+        supported, name: string
+        for attrib in extension_element.attribs {
+            switch attrib.key {
+            case "name": name = attrib.val
+            case "supported": supported = attrib.val
+            }
+        }
+        supported_apis := strings.split(supported, "|")
+        found_gl := false
+        for api in supported_apis {
+            api := strings.trim_space(api)
+            if api == "gl" {
+                found_gl = true
+                break
+            }
+        }
+        if name not_in version.extensions do continue
+        if !found_gl do continue extensions_loop
+        register_extension(registry, name)
+        requires_loop: for v in extension_element.value do if tag_id, is_tag := v.(xml.Element_ID); is_tag {
+            require_tag := doc.elements[tag_id]
+            if require_tag.ident != "require" do continue requires_loop
+            for v in require_tag.value do if tag_id, is_tag := v.(xml.Element_ID); is_tag {
+                tag := doc.elements[tag_id]
+                require_name: string
+                for attrib in tag.attribs {
+                    if attrib.key == "name" do require_name = name
+                }
+                switch tag.ident {
+                case "enum":
+                    
+                case "command":
                 }
             }
         }
