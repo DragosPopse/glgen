@@ -54,6 +54,49 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
         }
     }
 
+    write_string(sb, "\n")
+
+    for ext in registry.extensions {
+        fmt.sbprintf(sb, "// %s\n", ext.name)
+        for d in ext.enums {
+            if d.name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
+            d := d^
+            if opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+            fmt.sbprintf(sb, "%s :: %s\n", d.name, d.value)
+        }
+    }
+
+    write_string(sb, "\n")
+
+    for ext in registry.extensions {
+        fmt.sbprintf(sb, "// %s\n", ext.name)
+        for d in ext.commands {
+            d := d^
+            if opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+            fmt.sbprintf(sb, "impl_%s: proc \"c\" (", d.name)
+                for param, i in d.params {
+                    param := param // this is not needed rn... it's even wrong
+                    if opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
+                    fmt.sbprintf(sb, "%s: %s", param.name, param.type)
+                    if i < len(d.params) - 1 {
+                        write_string(sb, ", ")
+                    }
+                }
+                write_string(sb, ")")
+                if d.return_type != "" {
+                    fmt.sbprintf(sb, " -> %s", d.return_type)
+                }
+                write_string(sb, "\n")
+        }
+    }
+
+    write_string(sb, "\n")
+
+    for ext in registry.extensions {
+        fmt.sbprintf(sb, "%s := false\n", ext.name)
+    }
+
+
     write_string(sb, "\n\n")
     write_string(sb, "// Wrappers\n")
 
@@ -103,5 +146,26 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
             fmt.sbprintf(sb, "    set_proc_address(impl_%s, \"%s\")\n", name, command.name)
         }
     }
+
+    extensions_enum, num_extensions_enum: string
+    glGetStringi_str, glGetIntegerv_str: string
+    if opts.remove_gl_prefix {
+        extensions_enum = "EXTENSIONS"
+        num_extensions_enum = "NUM_EXTENSIONS"
+        glGetStringi_str = "impl_GetStringi"
+        glGetIntegerv_str = "impl_GetIntegerv"
+    } else {
+        extensions_enum = "GL_EXTENSIONS"
+        num_extensions_enum = "GL_NUM_EXTENSIONS"
+        glGetStringi_str = "impl_glGetStringi"
+        glGetIntegerv_str = "impl_glGetIntegerv"
+    }
+    write_string(sb, "\n")
+    
+    fmt.sbprintf(sb, "    ext_count := %s(%s) // Todo: error handling \n", glGetIntegerv_str, num_extensions_enum)
+    
+    fmt.sbprintf(sb, "    Extension_Load_Helper :: struct {{ name: string, loaded_ptr: ^bool}}\n")
+    
+
     write_string(sb, "}\n\n")
 }

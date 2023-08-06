@@ -118,7 +118,7 @@ register_feature_command :: proc(registry: ^GL_Registry, feature_name: string, d
 
 register_extension_command :: proc(registry: ^GL_Registry, extension_name: string, def_name: string) {
     fmt.assertf(def_name not_in registry.all_defs, "%v command already exists", def_name)
-    fmt.assertf(extension_name in registry.all_features, "%v feature doesn't exist", extension_name)
+    fmt.assertf(extension_name in registry.all_extensions, "%v feature doesn't exist", extension_name)
     extension := registry.all_extensions[extension_name]
     c := new(GL_Command)
     c.name = def_name
@@ -266,7 +266,7 @@ register_features_and_extensions :: proc(doc: ^xml.Document, registry: ^GL_Regis
                 break
             }
         }
-        if name not_in version.extensions do continue
+        if name not_in version.extensions do continue extensions_loop
         if !found_gl do continue extensions_loop
         register_extension(registry, name)
         requires_loop: for v in extension_element.value do if tag_id, is_tag := v.(xml.Element_ID); is_tag {
@@ -276,7 +276,7 @@ register_features_and_extensions :: proc(doc: ^xml.Document, registry: ^GL_Regis
                 tag := doc.elements[tag_id]
                 require_name: string
                 for attrib in tag.attribs {
-                    if attrib.key == "name" do require_name = name
+                    if attrib.key == "name" do require_name = attrib.val
                 }
                 switch tag.ident {
                 case "enum":

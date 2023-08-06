@@ -398,6 +398,7 @@ main :: proc() {
         opts.version.minor = 6
         opts.version.profile = .Core
         opts.remove_gl_prefix = true
+        opts.version.extensions["GL_KHR_parallel_shader_compile"] = true
     }
     gl_xml_file := "./OpenGL-Registry/xml/gl.xml"
     clock: time.Stopwatch
