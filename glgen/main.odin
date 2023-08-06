@@ -394,6 +394,8 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
 
     for d in state.registry.types {
         if strings.contains(d.name, "struct") || d.name == "GLvoid" || d.name == "void" do continue // Rework
+        d := d
+        if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
     }
 
@@ -401,12 +403,16 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
 
     for f in state.registry.features do for d in f.enums {
         if d.name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
+        d := d
+        if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.value)
     }
 
     write_string(&sb, "\n")
 
     for f in state.registry.features do for d in f.commands {
+        d := d
+        if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "impl_%s: proc \"c\" (", d.name)
             for param, i in d.params {
                 fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
@@ -425,6 +431,8 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
     write_string(&sb, "// Wrappers\n")
 
     for f in state.registry.features do for d in f.commands {
+        d := d
+        if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "%s :: proc \"c\" (", d.name)
         for param, i in d.params {
             fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
