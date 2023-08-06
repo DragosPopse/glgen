@@ -57,6 +57,7 @@ remove_gl_prefix :: proc(str: string) -> string {
         return str[3:]
     }
     if strings.has_prefix(str, "GL") || strings.has_prefix(str, "gl") {
+        if str[2:] == "enum" do return "Enum"
         return str[2:]
     }
     return str
@@ -178,7 +179,7 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
                 if strings.contains(c_type, "struct") {
                     type.odin_type = "rawptr"
                 } else {
-                    type.odin_type = remove_gl_prefix(c_type)
+                    type.odin_type = c_type
                 }
             }
             if type.name == "GLboolean" do type.odin_type = "bool"
@@ -197,8 +198,8 @@ parse_gl_types :: proc(state: ^State, doc: ^xml.Document, types_elem: ^xml.Eleme
         }
         
         if type.name != "khrplatform" && type.c_type != "void" {
-            type.name = remove_gl_prefix(type.name)
-            if type.name == "enum" do type.name = "Enum" 
+            //type.name = remove_gl_prefix(type.name)
+            //if type.name == "enum" do type.name = "Enum" 
             //gl_type := registry_new_def(&state.registry, type.name, GL_Type)
             //gl_type^ = type
             gl_type := new(GL_Type)
@@ -283,8 +284,8 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
                 }
             }
             concat_type = strings.trim_space(concat_type)
-            concat_type = remove_gl_prefix(concat_type)
-            if concat_type == "enum" do concat_type = "Enum"
+            //concat_type = remove_gl_prefix(concat_type)
+            //if concat_type == "enum" do concat_type = "Enum"
             if is_string {
                 return_type = "cstring"
             } else if is_ptr {
@@ -345,7 +346,7 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             }
             
             concat_type = strings.trim_space(concat_type)
-            concat_type = remove_gl_prefix(concat_type)
+            //concat_type = remove_gl_prefix(concat_type)
             if concat_type == "enum" do concat_type = "Enum"
             if strings.contains(concat_type, "struct") { // Todo: Make a special type for these
                 param.type = "rawptr"
@@ -396,6 +397,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
         if strings.contains(d.name, "struct") || d.name == "GLvoid" || d.name == "void" do continue // Rework
         d := d
         if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+        if definition_exists(&state.registry, d.odin_type) && state.opts.remove_gl_prefix do d.odin_type = remove_gl_prefix(d.odin_type)
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
     }
 
@@ -415,6 +417,8 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
         if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "impl_%s: proc \"c\" (", d.name)
             for param, i in d.params {
+                param := param
+                if state.opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
                 fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
                 if i < len(d.params) - 1 {
                     write_string(&sb, ", ")
@@ -435,6 +439,8 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
         if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "%s :: proc \"c\" (", d.name)
         for param, i in d.params {
+            param := param
+            if state.opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
             fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
             if i < len(d.params) - 1 {
                 write_string(&sb, ", ")
