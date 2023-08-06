@@ -383,12 +383,7 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
 
 
 
-parse_gl_version :: proc(v: string) -> (major, minor: int) {
-    versions := strings.split(v, ".")
-    major = int(versions[0][0] - '0')
-    minor = int(versions[1][0] - '0')
-    return major, minor
-}
+
 
 
 generate_gl_def :: proc(state: ^State) -> (result: string) {
@@ -401,7 +396,7 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
 
     for d in state.registry.types {
         if strings.contains(d.name, "struct") || d.name == "GLvoid" || d.name == "void" do continue // Rework
-        d := d
+        d := d^
         if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         if definition_exists(&state.registry, d.odin_type) && state.opts.remove_gl_prefix do d.odin_type = remove_gl_prefix(d.odin_type)
         fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.odin_type)
@@ -409,39 +404,45 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
 
     write_string(&sb, "\n")
 
-    for f in state.registry.features do for d in f.enums {
-        if d.name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
-        d := d
-        if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
-        fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.value)
+    for f in state.registry.features {
+        fmt.sbprintf(&sb, "// %s\n", f.name)
+        for d in f.enums {
+            if d.name == "" do continue // This shouldn't be here... but it seems something is wrong somewhere in parsing
+            d := d^
+            if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+            fmt.sbprintf(&sb, "%s :: %s\n", d.name, d.value)
+        }
     }
 
     write_string(&sb, "\n")
 
-    for f in state.registry.features do for d in f.commands {
-        d := d
-        if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
-        fmt.sbprintf(&sb, "impl_%s: proc \"c\" (", d.name)
-            for param, i in d.params {
-                param := param
-                if state.opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
-                fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
-                if i < len(d.params) - 1 {
-                    write_string(&sb, ", ")
+    for f in state.registry.features {
+        fmt.sbprintf(&sb, "// %s\n", f.name)
+        for d in f.commands {
+            d := d^
+            if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+            fmt.sbprintf(&sb, "impl_%s: proc \"c\" (", d.name)
+                for param, i in d.params {
+                    param := param // this is not needed rn...
+                    if state.opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
+                    fmt.sbprintf(&sb, "%s: %s", param.name, param.type)
+                    if i < len(d.params) - 1 {
+                        write_string(&sb, ", ")
+                    }
                 }
-            }
-            write_string(&sb, ")")
-            if d.return_type != "" {
-                fmt.sbprintf(&sb, " -> %s", d.return_type)
-            }
-            write_string(&sb, "\n")
+                write_string(&sb, ")")
+                if d.return_type != "" {
+                    fmt.sbprintf(&sb, " -> %s", d.return_type)
+                }
+                write_string(&sb, "\n")
+        }
     }
 
     write_string(&sb, "\n\n")
     write_string(&sb, "// Wrappers\n")
 
     for f in state.registry.features do for d in f.commands {
-        d := d
+        d := d^
         if state.opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
         fmt.sbprintf(&sb, "%s :: proc \"c\" (", d.name)
         for param, i in d.params {
@@ -472,6 +473,21 @@ generate_gl_def :: proc(state: ^State) -> (result: string) {
         write_string(&sb, " }\n")
         
     }
+
+    write_string(&sb, "\n\n")
+    write_string(&sb, "Set_Proc_Address :: #type proc(p: rawptr, name: cstring)\n\n")
+    
+    write_string(&sb, "load_gl :: proc(set_proc_address: Set_Proc_Address) {\n")
+    using state
+    for feature in registry.features {
+        fmt.sbprintf(&sb, "    // %s\n", feature.name)
+        for command in feature.commands {
+            name := command.name
+            if opts.remove_gl_prefix do name = remove_gl_prefix(name)
+            fmt.sbprintf(&sb, "    set_proc_address(impl_%s, \"%s\")\n", name, command.name)
+        }
+    }
+    write_string(&sb, "}\n\n")
 
     return strings.to_string(sb)
 }
