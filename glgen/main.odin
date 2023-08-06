@@ -250,7 +250,7 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
         case xml.Element_ID:
             elem := doc.elements[v]
             if elem.ident == "name" {
-                name = remove_gl_prefix(elem.value[0].(string))
+                name = (elem.value[0].(string))
             } else if elem.ident == "ptype" {
                 concat_type = strings.concatenate({concat_type, elem.value[0].(string)})
             }
@@ -284,8 +284,12 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
                 }
             }
             concat_type = strings.trim_space(concat_type)
-            //concat_type = remove_gl_prefix(concat_type)
-            //if concat_type == "enum" do concat_type = "Enum"
+            
+            if state.opts.remove_gl_prefix { // this mf shouldn't be here
+                concat_type = remove_gl_prefix(concat_type)
+                if concat_type == "enum" do concat_type = "Enum"
+            }
+            
             if is_string {
                 return_type = "cstring"
             } else if is_ptr {
@@ -346,8 +350,10 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             }
             
             concat_type = strings.trim_space(concat_type)
-            //concat_type = remove_gl_prefix(concat_type)
-            if concat_type == "enum" do concat_type = "Enum"
+            if state.opts.remove_gl_prefix { // This shouldn't be here, but it's easier
+                concat_type = remove_gl_prefix(concat_type)
+                if concat_type == "enum" do concat_type = "Enum"
+            }
             if strings.contains(concat_type, "struct") { // Todo: Make a special type for these
                 param.type = "rawptr"
             } else if is_string {
