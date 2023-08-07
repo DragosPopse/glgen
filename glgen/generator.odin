@@ -8,8 +8,11 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
     write_string(sb, "package gl\n")
     write_string(sb, "import \"core:c\"\n")
     write_string(sb, "import \"core:builtin\"\n")
+    write_string(sb, "import \"core:fmt\"\n")
+    write_string(sb, "import \"core:runtime\"\n")
     write_string(sb, "\n")
-
+    write_string(sb, "GL_DEBUG :: #config(GL_DEBUG, ODIN_DEBUG)\n")
+    write_string(sb, "\n")
     for d in registry.types {
         if strings.contains(d.name, "struct") || d.name == "GLvoid" || d.name == "void" do continue // Rework
         d := d^
@@ -102,37 +105,160 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
     write_string(sb, "\n\n")
     write_string(sb, "// Wrappers\n")
 
-    for f in registry.features do for d in f.commands {
-        d := d^
-        if opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
-        fmt.sbprintf(sb, "%s :: proc \"c\" (", d.name)
-        for param, i in d.params {
-            param := param
-            if opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
-            fmt.sbprintf(sb, "%s: %s", param.name, param.type)
-            if i < len(d.params) - 1 {
-                write_string(sb, ", ")
+    write_string(sb, "when GL_DEBUG {\n")
+    {
+        write_string(sb, `
+    debug_helper :: proc"c"(from_loc: runtime.Source_Code_Location, num_ret: int, args: ..any, loc := #caller_location) {
+        context = runtime.default_context()
+
+        Error_Enum :: enum {
+            NO_ERROR = NO_ERROR,
+            INVALID_VALUE = INVALID_VALUE,
+            INVALID_ENUM = INVALID_ENUM,
+            INVALID_OPERATION = INVALID_OPERATION,
+            INVALID_FRAMEBUFFER_OPERATION = INVALID_FRAMEBUFFER_OPERATION,
+            OUT_OF_MEMORY = OUT_OF_MEMORY,
+            STACK_UNDERFLOW = STACK_UNDERFLOW,
+            STACK_OVERFLOW = STACK_OVERFLOW,
+            // TODO: What if the return enum is invalid?
+        }
+
+        // There can be multiple errors, so we're required to continuously call glGetError until there are no more errors
+        for i := 0; /**/; i += 1 {
+            err := cast(Error_Enum)impl_GetError()
+            if err == .NO_ERROR { break }
+
+            fmt.printf("%d: glGetError() returned GL_%v\n", i, err)
+
+            // add function call
+            fmt.printf("   call: gl%s(", loc.procedure)
+            {
+                // add input arguments
+                for arg, i in args[num_ret:] {
+                if i > 0 { fmt.printf(", ") }
+
+                if v, ok := arg.(u32); ok { // TODO: Assumes all u32 are GLenum (they're not, GLbitfield and GLuint are also mapped to u32), fix later by better typing
+                    if err == .INVALID_ENUM {
+                        fmt.printf("INVALID_ENUM=%d", v)
+                    } else {
+                        fmt.printf("GL_%v=%d", GL_Enum(v), v)
+                    }
+                } else {
+                    fmt.printf("%v", arg)
+                }
+                }
+
+                // add return arguments
+                if num_ret == 1 {
+                    fmt.printf(") -> %v \n", args[0])
+                } else if num_ret > 1 {
+                    fmt.printf(") -> (")
+                    for arg, i in args[1:num_ret] {
+                        if i > 0 { fmt.printf(", ") }
+                        fmt.printf("%v", arg)
+                    }
+                    fmt.printf(")\n")
+                } else {
+                    fmt.printf(")\n")
+                }
             }
+
+            // add location
+            fmt.printf("   in:   %s(%d:%d)\n", from_loc.file_path, from_loc.line, from_loc.column)
         }
-        write_string(sb, ")")
-        if d.return_type != "" {
-            fmt.sbprintf(sb, " -> %s", d.return_type)
-        }
-        fmt.sbprintf(sb, " {{ ")
-        if d.return_type != "" {
-            fmt.sbprintf(sb, "return impl_%s(", d.name)
-        } else {
-            fmt.sbprintf(sb, "impl_%s(", d.name)
-        }
-        for param, i in d.params {
-            fmt.sbprintf(sb, "%s", param.name)
-            if i < len(d.params) - 1 {
-                write_string(sb, ", ")
-            }
-        }
-        write_string(sb, ")")
-        write_string(sb, " }\n")
     }
+`)
+        for f in registry.features do for d in f.commands {
+            d := d^
+            if opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+            fmt.sbprintf(sb, "    %s :: proc \"c\" (", d.name)
+            for param, i in d.params {
+                param := param
+                if opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
+                fmt.sbprintf(sb, "%s: %s", param.name, param.type)
+                if i < len(d.params) - 1 {
+                    write_string(sb, ", ")
+                }
+            }
+            if len(d.params) > 0 {
+                write_string(sb, ", loc := #caller_location)")
+            } else {
+                write_string(sb, "loc := #caller_location)")
+            }
+            if d.return_type != "" {
+                fmt.sbprintf(sb, " -> %s", d.return_type)
+            }
+            fmt.sbprintf(sb, " {{ ")
+            if d.return_type != "" {
+                fmt.sbprintf(sb, "ret := impl_%s(", d.name)
+            } else {
+                fmt.sbprintf(sb, "impl_%s(", d.name)
+            }
+            for param, i in d.params {
+                fmt.sbprintf(sb, "%s", param.name)
+                if i < len(d.params) - 1 {
+                    write_string(sb, ", ")
+                }
+            }
+            write_string(sb, "); ")
+            num_ret := 0 if d.return_type == "" else 1
+            fmt.sbprintf(sb, "debug_helper(loc, %d", num_ret)
+            if num_ret > 0 {
+                write_string(sb, ", ret")
+            }
+            if len(d.params) == 0 {
+                write_string(sb, "); ")
+            } else {
+                write_string(sb, ", ")
+                for param, i in d.params {
+                    fmt.sbprintf(sb, "%s", param.name)
+                    if i < len(d.params) - 1 {
+                        write_string(sb, ", ")
+                    }
+                }
+                write_string(sb, "); ")
+            }
+            if num_ret > 0 {
+                write_string(sb, "return ret")
+            }
+            write_string(sb, " }\n")
+        }
+    }
+    write_string(sb, "} else {\n")
+    {
+        for f in registry.features do for d in f.commands {
+            d := d^
+            if opts.remove_gl_prefix do d.name = remove_gl_prefix(d.name)
+            fmt.sbprintf(sb, "    %s :: proc \"c\" (", d.name)
+            for param, i in d.params {
+                param := param
+                if opts.remove_gl_prefix do param.name = remove_gl_prefix(param.name)
+                fmt.sbprintf(sb, "%s: %s", param.name, param.type)
+                if i < len(d.params) - 1 {
+                    write_string(sb, ", ")
+                }
+            }
+            write_string(sb, ")")
+            if d.return_type != "" {
+                fmt.sbprintf(sb, " -> %s", d.return_type)
+            }
+            fmt.sbprintf(sb, " {{ ")
+            if d.return_type != "" {
+                fmt.sbprintf(sb, "return impl_%s(", d.name)
+            } else {
+                fmt.sbprintf(sb, "impl_%s(", d.name)
+            }
+            for param, i in d.params {
+                fmt.sbprintf(sb, "%s", param.name)
+                if i < len(d.params) - 1 {
+                    write_string(sb, ", ")
+                }
+            }
+            write_string(sb, ")")
+            write_string(sb, " }\n")
+        }
+    }
+    write_string(sb, "}\n")
 
     write_string(sb, "\n\n")
     write_string(sb, "Set_Proc_Address :: #type proc(p: rawptr, name: cstring)\n\n")
