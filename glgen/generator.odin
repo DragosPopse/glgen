@@ -93,7 +93,9 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
     write_string(sb, "\n")
 
     for ext in registry.extensions {
-        fmt.sbprintf(sb, "%s := false\n", ext.name)
+        name := ext.name
+        if opts.remove_gl_prefix do name = remove_gl_prefix(name)
+        fmt.sbprintf(sb, "%s := false\n", name)
     }
 
 
@@ -130,20 +132,32 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
         }
         write_string(sb, ")")
         write_string(sb, " }\n")
-        
     }
 
     write_string(sb, "\n\n")
     write_string(sb, "Set_Proc_Address :: #type proc(p: rawptr, name: cstring)\n\n")
+
+    for ext in registry.extensions {
+        name := ext.name
+        if opts.remove_gl_prefix do name = remove_gl_prefix(name)
+        fmt.sbprintf(sb, "load_%s :: proc(set_proc_address: Set_Proc_Address) {{\n", name)
+        for command in ext.commands {
+            name := command.name
+            if opts.remove_gl_prefix do name = remove_gl_prefix(name)
+            fmt.sbprintf(sb, "    set_proc_address(&impl_%s, \"%s\")\n", name, command.name)
+        }
+        write_string(sb, "}\n\n")
+    }
     
     write_string(sb, "load_gl :: proc(set_proc_address: Set_Proc_Address) {\n")
+
     
     for feature in registry.features {
         fmt.sbprintf(sb, "    // %s\n", feature.name)
         for command in feature.commands {
             name := command.name
             if opts.remove_gl_prefix do name = remove_gl_prefix(name)
-            fmt.sbprintf(sb, "    set_proc_address(impl_%s, \"%s\")\n", name, command.name)
+            fmt.sbprintf(sb, "    set_proc_address(&impl_%s, \"%s\")\n", name, command.name)
         }
     }
 
@@ -162,10 +176,27 @@ generate :: proc(sb: ^strings.Builder, registry: ^GL_Registry, opts: Gen_Options
     }
     write_string(sb, "\n")
     
-    fmt.sbprintf(sb, "    ext_count := %s(%s) // Todo: error handling \n", glGetIntegerv_str, num_extensions_enum)
+    fmt.sbprintf(sb, "    ext_count: i32; %s(%s, &ext_count) // Todo: error handling \n", glGetIntegerv_str, num_extensions_enum)
     
-    fmt.sbprintf(sb, "    Extension_Load_Helper :: struct {{ name: string, loaded_ptr: ^bool}}\n")
-    
+    if len(registry.all_extensions) > 0 {
+        fmt.sbprintf(sb, "    Extension_Load_Helper :: struct {{ name: cstring, loaded_ptr: ^bool, load_proc: proc(set_proc_address: Set_Proc_Address)}}\n")
+        fmt.sbprintf(sb, "    extensions_wanted := [?]Extension_Load_Helper {{\n")
+        for extension in registry.extensions {
+            name := extension.name
+            if opts.remove_gl_prefix do name = remove_gl_prefix(name)
+            fmt.sbprintf(sb, "        {{\"%s\", &%s, load_%s}},\n", extension.name, name, name)
+        }
+        fmt.sbprintf(sb, "    }\n")
+        write_string(sb, "    for i in 0..<ext_count {\n")
+        fmt.sbprintf(sb, "        name := %s(%s, cast(u32)i)\n", glGetStringi_str, extensions_enum)
+        write_string(sb, "        for &e in extensions_wanted {\n")
+        write_string(sb, "            if e.name == name {\n")
+        write_string(sb, "                e.loaded_ptr^ = true\n")
+        write_string(sb, "                e.load_proc(set_proc_address)\n")
+        write_string(sb, "            }\n")
+        write_string(sb, "        }\n")
+        write_string(sb, "    }\n")
+    }
 
     write_string(sb, "}\n\n")
 }

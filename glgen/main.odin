@@ -265,7 +265,7 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
             return_type = "rawptr"
         case:
             is_const := false
-            is_ptr := false
+            is_ptr := false // Need to handle pointer to pointer in return, but it's fine for now
             is_string := false // we still got issues with strings
             if strings.contains(concat_type, "*") {
                 is_ptr = true
@@ -275,8 +275,11 @@ parse_gl_command_proto :: proc(state: ^State, doc: ^xml.Document, proto: ^xml.El
                 is_const = true
                 concat_type, _ = strings.remove_all(concat_type, "const")
             }
-            if is_ptr && is_const && concat_type == "GLubyte" {
-                is_string = true
+            concat_type = strings.trim_space(concat_type)
+            if is_ptr && is_const { // TODO handle [^]cstring
+                if concat_type == "GLubyte" || concat_type == "GLchar" {
+                    is_string = true
+                }
             }
             for attrib in proto.attribs {
                 if attrib.key == "kind" && attrib.val == "String" {
@@ -336,12 +339,16 @@ parse_gl_command_param :: proc(state: ^State, doc: ^xml.Document, param_elem: ^x
             if ptr_count = strings.count(concat_type, "*"); ptr_count > 0 {
                 concat_type, _ = strings.remove(concat_type, "*", ptr_count)
             }
+            concat_type = strings.trim_space(concat_type)
             if strings.contains(concat_type, "const") {
                 is_const = true
                 concat_type, _ = strings.remove_all(concat_type, "const")
             }
-            if ptr_count > 0 && is_const && (concat_type == "GLubyte" || concat_type == "GLchar") { // TODO handle [^]cstring
-                is_string = true
+            concat_type = strings.trim_space(concat_type)
+            if ptr_count > 0 && is_const { // TODO handle [^]cstring
+                if concat_type == "GLubyte" || concat_type == "GLchar" {
+                    is_string = true
+                }
             }
             for attrib in param_elem.attribs {
                 if attrib.key == "kind" && attrib.val == "String" {
